@@ -1,0 +1,60 @@
+display('Test');
+
+
+for k = 1:handles.CEST.CEST.reco.RECO_size(1)
+    for l = 1:handles.CEST.CEST.reco.RECO_size(2)
+        if squeeze(handles.CEST.CEST_S0.dataset(1,k,l)) > 1*10^4 % Filter Rauschen
+        for i = 1:handles.CEST.CEST.method.Number_Offsets
+            x(1,i) = handles.CEST.CEST.method.MT_Offsets_NoM0(1,i);
+            y(1,i) = (handles.CEST.CEST.dataset(i,k,l).*handles.CEST.CEST.visu_pars.VisuCoreDataSlope(1,i))./(handles.CEST.CEST_S0.dataset(1,k,l).*handles.CEST.CEST_S0.visu_pars.VisuCoreDataSlope); 
+        end
+        
+      
+        [xSort, xIndex] = sort(x);
+        CEST = [(x(xIndex(:)))*0.0025; y(xIndex(:))];
+        
+%         for j = 1:handles.CEST.CEST.method.Number_Offsets/2+0.5
+%             handles.CEST.asymm_Spectra_ROI(1,j) = handles.CEST.Ergebnis(2,j) - handles.CEST.Ergebnis(2,end-j+1);
+%             handles.CEST.asymm_Spectra_ROI(2,j) = (handles.CEST.xSort(j)*-1)*0.0025;
+%             %if handles.CEST.mittel(j) == handles.CEST.mittel(end-j+1), break, end
+%         end
+        
+        for j = 1:handles.CEST.CEST.method.Number_Offsets/2+0.5
+            asymm_Contrast(j,1) = CEST(2,j) - CEST(2,end-j+1);
+            asymm_Contrast(j,2) = (xSort(j)*-1)*0.0025;
+        end
+        
+        sat_pos = find(CEST(1,:) == 0);
+        sat = CEST(2,sat_pos);
+
+        start_Contrast = 1;
+        startPositions_Contrast = find(asymm_Contrast(:,2)<start_Contrast);
+        startValue_Contrast = asymm_Contrast(startPositions_Contrast(1)-1,2);
+    
+        stop_Contrast = 2;
+        stopPositions_Contrast = find(asymm_Contrast(:,2)>stop_Contrast);
+        stopValue_Contrast = asymm_Contrast(stopPositions_Contrast(end)+1,2);
+        
+        asymm_Contrast = asymm_Contrast(asymm_Contrast(:,2)>=startValue_Contrast&asymm_Contrast(:,2)<=stopValue_Contrast,:);
+        asymm_s = size(asymm_Contrast);
+        
+        if asymm_s(1)== 1
+            AsymmValue = asymm_Contrast(1);
+        else
+            AsymmValue = abs(trapz(asymm_Contrast(:,2), asymm_Contrast(:,1))) / (stopValue_Contrast - startValue_Contrast);
+        end
+        
+        if sat < 0.3 & AsymmValue<1
+            handles.CEST.ContrastMatrix(k,l) = AsymmValue;
+        else
+            handles.CEST.ContrastMatrix(k,l) = 0;
+        end
+        end
+        
+    end
+end
+
+figure;imagesc(handles.CEST.ContrastMatrix);colormap('hot');cb = colorbar;
+title(cb, 'MTR_a_s_y_m_m');
+
+test = 1+1;

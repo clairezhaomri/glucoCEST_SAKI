@@ -1,0 +1,16 @@
+CESTQCConfig used by WZ_QueueCEST_QC on 11-Sep-2026 07:23:25
+ConfigFile: /Users/clairezhao/Documents/data/Hoerr/MRI/pv6/CEST/nutritionCEST/NewData/CESTQCConfig.m
+forceRerun: 1 | makePlots: 1 | fitPostQC: 1
+
+RoiFile: ROI_ctx.mat, ROI_medulla.mat
+ZminThresh: 0.1
+ZmaxThresh: 1.2
+UseRMSEPercentile: 0
+RMSEPercentile: 70
+RMSEThresh: 0.05
+R2Thresh: 0.95
+UseBoundCheck: 1
+BoundTol: 1e-14
+UseSpatialOutlier: 0
+SpatialMADMultiplier: 5
+SpatialWindow: [3 3]
