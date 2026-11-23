@@ -2,12 +2,20 @@ function extra = computeCESTExtraQC(dataDir, varargin)
 % Extra no-refit QC on top of computeCESTQualityMetrics (needs QC_result.mat).
 % Reads LorentzianFitResult.mat + QC_result.mat + ROI files. R2018a compatible.
 % Writes: QC_extra.mat, QC_extra_summary.txt, ROI_<label>_QC.mat (originals untouched).
+%
+% Design notes:
+%  - Resid and Phys use INTERIOR offsets only (2:end-1), so a single bad endpoint
+%    cannot trigger them. Endpoint problems are reported separately as endBad
+%    (information only, NOT used for exclusion).
+%  - Asym (endpoint asymmetry vs ROI median) is information only.
+%  - Exclusion = Invalid  OR  (Resid + Phys + Corr >= MinFlagsSoft)
 p = inputParser;
 addParameter(p, 'RoiFile', {'ROI_ctx.mat','ROI_medulla.mat'});
-addParameter(p, 'ResidKSigma', 4);     % max|resid| / robust sigma
+addParameter(p, 'ResidKSigma', 4);     % max|resid| / robust sigma (interior offsets)
 addParameter(p, 'ResidAbsMin', 0.05);  % ...AND max|resid| must exceed this (Z units)
 addParameter(p, 'SigmaFloor', 0.01);   % floor for robust sigma
-addParameter(p, 'AsymMADk', 4);        % endpoint asymmetry robust z within ROI
+addParameter(p, 'AsymMADk', 4);        % endpoint asymmetry robust z within ROI (info only)
+addParameter(p, 'EndResidAbs', 0.10);  % endpoint |resid| above this -> endBad (info only)
 addParameter(p, 'CorrMin', 0.95);      % corr with ROI median spectrum
 addParameter(p, 'ZPhysLo', -0.02);
 addParameter(p, 'ZPhysHi', 1.10);
@@ -25,7 +33,9 @@ if numel(W) ~= nW
     error('computeCESTExtraQC:offsetMismatch','%d offsets in P.SEQ.w vs %d in Z_corrExt (%s).', numel(W), nW, dataDir);
 end
 if any(diff(W) <= 0), error('computeCESTExtraQC:unsorted','W not ascending in %s', dataDir); end
+if nW < 5, error('computeCESTExtraQC:tooFewOffsets','Only %d offsets in %s', nW, dataDir); end
 tissue = (F.Segment(:,:,1) == 1);
+inner = 2:nW-1;
 
 % ---- load ROIs ----
 ROIs = cell(1,numel(roiFiles)); labels = cell(1,numel(roiFiles)); anyROI = false(nx,ny);
@@ -42,30 +52,33 @@ end
 
 % ---- per-voxel metrics ----
 valid = false(nx,ny); maxResid = nan(nx,ny); maxAbs = nan(nx,ny);
-asym = nan(nx,ny); physBad = false(nx,ny); resid3 = nan(nx,ny,nW); sigmaMap = nan(nx,ny);
-for i = find(tissue | anyROI)'
+asym = nan(nx,ny); physBad = false(nx,ny); endBad = false(nx,ny);
+resid3 = nan(nx,ny,nW); sigmaMap = nan(nx,ny);
+for i = find(tissue & true)'
     [xi,yi] = ind2sub([nx ny], i);
-    if ~tissue(xi,yi), continue; end
     z = double(reshape(Z(xi,yi,1,:), [], 1));
     pp = double(squeeze(F.popt(xi,yi,1,:))); pp = pp(:);
     if any(~isfinite(z)) || any(~isfinite(pp)), continue; end
     [f,~] = fitmodelfunc_ANA(pp, F.P);
     yh = reshape(f(W), [], 1);
     if numel(yh) ~= nW, continue; end
-    r = z - yh;
-    s = max(1.4826*median(abs(r - median(r))), o.SigmaFloor);
+    r = z - yh; ri = r(inner);
+    s = max(1.4826*median(abs(ri - median(ri))), o.SigmaFloor);
     valid(xi,yi) = true;
     resid3(xi,yi,:) = r; sigmaMap(xi,yi) = s;
-    maxAbs(xi,yi) = max(abs(r)); maxResid(xi,yi) = maxAbs(xi,yi)/s;
+    maxAbs(xi,yi) = max(abs(ri)); maxResid(xi,yi) = maxAbs(xi,yi)/s;
     asym(xi,yi) = z(end) - z(1);
-    physBad(xi,yi) = any(z < o.ZPhysLo) || any(z > o.ZPhysHi);
+    zi = z(inner);
+    physBad(xi,yi) = any(zi < o.ZPhysLo) || any(zi > o.ZPhysHi);
+    endBad(xi,yi) = max(abs(r([1 nW]))) > o.EndResidAbs;
 end
 
 flag.Invalid = (tissue | anyROI) & ~valid;
 flag.Resid   = valid & (maxResid > o.ResidKSigma) & (maxAbs > o.ResidAbsMin);
 flag.Phys    = valid & physBad;
-flag.Asym    = false(nx,ny);
+flag.Asym    = false(nx,ny);   % info only
 flag.Corr    = false(nx,ny);
+flag.EndBad  = valid & endBad; % info only
 corrMap = nan(nx,ny);
 offBadFrac = nan(nW, numel(roiFiles));
 
@@ -92,24 +105,26 @@ for k = 1:numel(roiFiles)
     end
 end
 
-soft = double(flag.Resid) + double(flag.Asym) + double(flag.Phys) + double(flag.Corr);
+soft = double(flag.Resid) + double(flag.Phys) + double(flag.Corr);
 extraBad = flag.Invalid | (soft >= o.MinFlagsSoft);
 finalBad = logical(Q.badPixelMask) | extraBad;
 
 % ---- per-ROI summary + new ROI files ----
 lines = {sprintf('CEST extra QC | %s | N offsets = %d | %s', dataDir, nW, datestr(now))};
-lines{end+1} = sprintf('Params: ResidK=%g ResidAbsMin=%g Asym MADk=%g CorrMin=%g softFlags>=%d', ...
-    o.ResidKSigma, o.ResidAbsMin, o.AsymMADk, o.CorrMin, o.MinFlagsSoft);
+lines{end+1} = sprintf(['Params: ResidK=%g ResidAbsMin=%g CorrMin=%g softFlags>=%d | ' ...
+    'Resid/Phys on interior offsets | Asym and EndBad are info only'], ...
+    o.ResidKSigma, o.ResidAbsMin, o.CorrMin, o.MinFlagsSoft);
 newROI = cell(1,numel(roiFiles));
 for k = 1:numel(roiFiles)
     if isempty(ROIs{k}), continue; end
     R = logical(ROIs{k});
     nROI = nnz(R);
     newROI{k} = R & ~finalBad;
-    lines{end+1} = sprintf(['ROI %s: nROI %d | Invalid %d | Resid %d | Asym %d | Phys %d | Corr %d | ' ...
-        'oldBad %d | extraBad %d | finalBad %d | nClean %d (%.1f%% kept)'], labels{k}, nROI, ...
-        nnz(R&flag.Invalid), nnz(R&flag.Resid), nnz(R&flag.Asym), nnz(R&flag.Phys), nnz(R&flag.Corr), ...
-        nnz(R&Q.badPixelMask), nnz(R&extraBad), nnz(R&finalBad), nnz(newROI{k}), 100*nnz(newROI{k})/max(nROI,1));
+    lines{end+1} = sprintf(['ROI %s: nROI %d | Invalid %d | Resid %d | Phys %d | Corr %d | ' ...
+        'Asym(info) %d | EndBad(info) %d | oldBad %d | extraBad %d | finalBad %d | nClean %d (%.1f%% kept)'], ...
+        labels{k}, nROI, nnz(R&flag.Invalid), nnz(R&flag.Resid), nnz(R&flag.Phys), nnz(R&flag.Corr), ...
+        nnz(R&flag.Asym), nnz(R&flag.EndBad), nnz(R&Q.badPixelMask), nnz(R&extraBad), ...
+        nnz(R&finalBad), nnz(newROI{k}), 100*nnz(newROI{k})/max(nROI,1));
     if o.SaveROI
         [~,base] = fileparts(roiFiles{k});
         ROI = cast(newROI{k}, class(ROIs{k})); %#ok<NASGU>
@@ -121,7 +136,7 @@ fid = fopen(fullfile(dataDir,'QC_extra_summary.txt'),'w');
 fprintf(fid,'%s\n', lines{:}); fclose(fid);
 
 extra = struct('flag',flag,'maxResidSigma',maxResid,'maxAbsResid',maxAbs,'asymMap',asym, ...
-    'corrMap',corrMap,'offBadFrac',offBadFrac,'W',W,'extraBad',extraBad, ...
+    'corrMap',corrMap,'endBad',endBad,'offBadFrac',offBadFrac,'W',W,'extraBad',extraBad, ...
     'finalBad',finalBad,'newROI',{newROI},'roiLabels',{labels},'opt',o);
 save(fullfile(dataDir,'QC_extra.mat'), 'extra', '-v7');
 end
