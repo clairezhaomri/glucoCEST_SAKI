@@ -4,9 +4,10 @@ function extra = computeCESTExtraQC(dataDir, varargin)
 % Writes: QC_extra.mat, QC_extra_summary.txt, ROI_<label>_QC.mat (originals untouched).
 %
 % Design notes:
-%  - Resid and Phys use INTERIOR offsets only (2:end-1), so a single bad endpoint
-%    cannot trigger them. Endpoint problems are reported separately as endBad
-%    (information only, NOT used for exclusion).
+%  - Resid and Phys use INTERIOR offsets only (3:end-2), so the two outermost
+%    points on each side (+-5 and +-4.69 ppm; likely dummy-scan/steady-state
+%    affected) cannot trigger them. Their problems are reported separately as
+%    endBad (information only, NOT used for exclusion).
 %  - Asym (endpoint asymmetry vs ROI median) is information only.
 %  - Exclusion = Invalid  OR  (Resid + Phys + Corr >= MinFlagsSoft)
 p = inputParser;
@@ -15,7 +16,8 @@ addParameter(p, 'ResidKSigma', 4);     % max|resid| / robust sigma (interior off
 addParameter(p, 'ResidAbsMin', 0.05);  % ...AND max|resid| must exceed this (Z units)
 addParameter(p, 'SigmaFloor', 0.01);   % floor for robust sigma
 addParameter(p, 'AsymMADk', 4);        % endpoint asymmetry robust z within ROI (info only)
-addParameter(p, 'EndResidAbs', 0.10);  % endpoint |resid| above this -> endBad (info only)
+addParameter(p, 'EndResidAbs', 0.10);  % outer-point |resid| above this -> endBad (info only)
+addParameter(p, 'NTrim', 2);           % outer points trimmed on EACH side for Resid/Phys
 addParameter(p, 'CorrMin', 0.95);      % corr with ROI median spectrum
 addParameter(p, 'ZPhysLo', -0.02);
 addParameter(p, 'ZPhysHi', 1.10);
@@ -33,9 +35,11 @@ if numel(W) ~= nW
     error('computeCESTExtraQC:offsetMismatch','%d offsets in P.SEQ.w vs %d in Z_corrExt (%s).', numel(W), nW, dataDir);
 end
 if any(diff(W) <= 0), error('computeCESTExtraQC:unsorted','W not ascending in %s', dataDir); end
-if nW < 5, error('computeCESTExtraQC:tooFewOffsets','Only %d offsets in %s', nW, dataDir); end
+nt = o.NTrim;
+if nW < 2*nt + 5, error('computeCESTExtraQC:tooFewOffsets','Only %d offsets in %s', nW, dataDir); end
 tissue = (F.Segment(:,:,1) == 1);
-inner = 2:nW-1;
+inner  = (nt+1):(nW-nt);
+outer  = [1:nt, (nW-nt+1):nW];
 
 % ---- load ROIs ----
 ROIs = cell(1,numel(roiFiles)); labels = cell(1,numel(roiFiles)); anyROI = false(nx,ny);
@@ -54,7 +58,7 @@ end
 valid = false(nx,ny); maxResid = nan(nx,ny); maxAbs = nan(nx,ny);
 asym = nan(nx,ny); physBad = false(nx,ny); endBad = false(nx,ny);
 resid3 = nan(nx,ny,nW); sigmaMap = nan(nx,ny);
-for i = find(tissue & true)'
+for i = find(tissue)'
     [xi,yi] = ind2sub([nx ny], i);
     z = double(reshape(Z(xi,yi,1,:), [], 1));
     pp = double(squeeze(F.popt(xi,yi,1,:))); pp = pp(:);
@@ -70,7 +74,7 @@ for i = find(tissue & true)'
     asym(xi,yi) = z(end) - z(1);
     zi = z(inner);
     physBad(xi,yi) = any(zi < o.ZPhysLo) || any(zi > o.ZPhysHi);
-    endBad(xi,yi) = max(abs(r([1 nW]))) > o.EndResidAbs;
+    endBad(xi,yi) = max(abs(r(outer))) > o.EndResidAbs;
 end
 
 flag.Invalid = (tissue | anyROI) & ~valid;
@@ -93,9 +97,9 @@ for k = 1:numel(roiFiles)
         [xi,yi] = ind2sub([nx ny], idx(j));
         A(j,:) = reshape(Z(xi,yi,1,:), 1, []);
     end
-    med = median(A,1);
+    med = median(A(:,inner),1);
     for j = 1:numel(idx)
-        c = corrcoef(A(j,:), med);
+        c = corrcoef(A(j,inner), med);
         corrMap(idx(j)) = c(1,2);
     end
     flag.Corr(idx) = flag.Corr(idx) | (corrMap(idx) < o.CorrMin);
@@ -111,9 +115,9 @@ finalBad = logical(Q.badPixelMask) | extraBad;
 
 % ---- per-ROI summary + new ROI files ----
 lines = {sprintf('CEST extra QC | %s | N offsets = %d | %s', dataDir, nW, datestr(now))};
-lines{end+1} = sprintf(['Params: ResidK=%g ResidAbsMin=%g CorrMin=%g softFlags>=%d | ' ...
+lines{end+1} = sprintf(['Params: ResidK=%g ResidAbsMin=%g CorrMin=%g softFlags>=%d NTrim=%d | ' ...
     'Resid/Phys on interior offsets | Asym and EndBad are info only'], ...
-    o.ResidKSigma, o.ResidAbsMin, o.CorrMin, o.MinFlagsSoft);
+    o.ResidKSigma, o.ResidAbsMin, o.CorrMin, o.MinFlagsSoft, nt);
 newROI = cell(1,numel(roiFiles));
 for k = 1:numel(roiFiles)
     if isempty(ROIs{k}), continue; end
