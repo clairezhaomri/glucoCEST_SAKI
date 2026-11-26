@@ -1,5 +1,6 @@
 function out = computeCESTRescueQC(dataDir, varargin)
 % Rescue voxels excluded only by outer-offset problems + neighbourhood likelihood.
+% ONLY voxels inside the ROI files are evaluated/rescued/flagged.
 % Needs LorentzianFitResult.mat, QC_result.mat, QC_extra.mat. No refit. R2018a ok.
 % Writes QC_final.mat, QC_final_summary.txt, ROI_<label>_QC2.mat (originals untouched).
 def = CESTQCConfig();
@@ -28,8 +29,18 @@ basicBad = logical(Q.badPixelMask); finalBad = logical(ex.finalBad);
 inner = (o.NTrim+1):(nW-o.NTrim);
 gw = abs(W) >= o.GlucWin(1) & abs(W) <= o.GlucWin(2);
 
-%% ---- A) rescue ----
-cand = find(basicBad & ~logical(ex.extraBad) & tissue & ...
+%% ---- ROIs (loaded first: everything below is ROI-only) ----
+ROIs = cell(1,numel(roiFiles)); labels = cell(1,numel(roiFiles)); anyROI = false(nx,ny);
+for k = 1:numel(roiFiles)
+    [~,lab] = fileparts(roiFiles{k}); labels{k} = strrep(lab,'ROI_','');
+    rp = fullfile(dataDir, roiFiles{k});
+    if ~isfile(rp), warning('ROI not found: %s', rp); continue; end
+    S = load(rp);
+    if isfield(S,'ROI') && isequal(size(S.ROI),[nx ny]), ROIs{k} = logical(S.ROI); anyROI = anyROI | ROIs{k}; end
+end
+
+%% ---- A) rescue (ROI voxels only) ----
+cand = find(anyROI & basicBad & ~logical(ex.extraBad) & tissue & ...
     ~Q.qcFlags.masks.Bound & ~Q.qcFlags.masks.Spatial);
 rescued = false(nx,ny); rmseIn = nan(nx,ny); r2In = nan(nx,ny); gMax = nan(nx,ny);
 for c = 1:numel(cand)
@@ -48,17 +59,7 @@ for c = 1:numel(cand)
         gMax(xi,yi) <= o.GlucResidMax;
 end
 
-%% ---- ROIs ----
-ROIs = cell(1,numel(roiFiles)); labels = cell(1,numel(roiFiles)); anyROI = false(nx,ny);
-for k = 1:numel(roiFiles)
-    [~,lab] = fileparts(roiFiles{k}); labels{k} = strrep(lab,'ROI_','');
-    rp = fullfile(dataDir, roiFiles{k});
-    if ~isfile(rp), continue; end
-    S = load(rp);
-    if isfield(S,'ROI') && isequal(size(S.ROI),[nx ny]), ROIs{k} = logical(S.ROI); anyROI = anyROI | ROIs{k}; end
-end
-
-%% ---- B) neighbourhood likelihood ----
+%% ---- B) neighbourhood likelihood (ROI voxels flagged; neighbours = any QC-passing tissue voxel) ----
 G = double(F.gluc_integral_fullMap); if ndims(G) > 2, G = G(:,:,1); end
 pass = ((tissue & ~finalBad) | rescued) & isfinite(G);
 Gp = nan(nx+4,ny+4); Gp(3:end-2,3:end-2) = G;
@@ -80,7 +81,7 @@ end
 finalBad2 = (finalBad & ~rescued) | spatialBad;
 
 %% ---- per-ROI summary + ROI files ----
-lines = {sprintf('CEST rescue+spatial QC | %s | nOffsets=%d | %s', dataDir, nW, datestr(now))};
+lines = {sprintf('CEST rescue+spatial QC (ROI only) | %s | nOffsets=%d | %s', dataDir, nW, datestr(now))};
 lines{end+1} = sprintf('Rescue: NTrim=%d GlucWin=[%g %g] GlucResidMax=%g | Spatial: ratio>=%g, floor=%g, support>=%d within x%g (5x5), minNb=%d', ...
     o.NTrim,o.GlucWin(1),o.GlucWin(2),o.GlucResidMax,o.RatioThresh,o.GlucFloor,o.MinSupport,o.SupportFactor,o.MinNeighbors);
 roi = struct('label',labels,'nROI',NaN,'nOldBad',NaN,'nRescued',NaN,'nSpatial',NaN,'nHotKept',NaN,'nClean',NaN,'mean',NaN,'sd',NaN);

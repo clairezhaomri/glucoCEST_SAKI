@@ -14,9 +14,12 @@
 %                                      <roi>_MeanROI_Zspectrum_with_LorentzFit_postQC.png,
 %                                      LorentzianFitPostQC.mat
 %
+% RESCUE QC (runRescueQC): computeCESTRescueQC rescues voxels excluded only by outer-offset problems and applies
+%   the 3x3/5x5 neighbourhood likelihood; writes QC_final.mat, ROI_<label>_QC2.mat. postMask then = resc.finalBad2.
+%
 % REQUIRES on the MATLAB path (/Users/clairezhao/Documents/MATLAB/CEST/):
 %   CESTQCConfig.m, computeCESTQualityMetrics.m, plotCESTQCBeforeAfter.m,
-%   plotCESTGlucoseROIResults.m, computeCESTExtraQC.m, plotCESTExtraQC.m, fitmodelfunc_ANA
+%   plotCESTGlucoseROIResults.m, computeCESTExtraQC.m, plotCESTExtraQC.m, computeCESTRescueQC.m, fitmodelfunc_ANA
 %
 % EXTRA QC: runs after the basic QC, NO pixelwise refit (evaluates the saved LorentzianFitResult.mat).
 %   Writes ROI_<label>_QC.mat (= original ROI & ~finalBad), QC_extra.mat, QC_extra_summary.txt.
@@ -37,6 +40,8 @@ makePlots  = true;    % false -> skip plotCESTQCBeforeAfter (faster batch)
 fitPostQC  = true;    % false -> skip post-QC mean-ROI Z-spectrum fit (plotCESTGlucoseROIResults)
 runExtraQC = true;    % false -> skip computeCESTExtraQC
 makeExtraPlots = true; % false -> skip plotCESTExtraQC (QC_extra_*.png)
+runRescueQC = true;   % false -> skip computeCESTRescueQC (rescue outer-offset voxels + neighbourhood likelihood)
+skipPattern = '';     % e.g. 'Ctrl' -> skip sessions whose path contains this text ('' = none)
 postFitMask = 'final'; % 'final' (basic OR extra QC) | 'basic' mask for the pre-vs-post mean-ROI fit
 
 %% -------- paths / config --------
@@ -64,7 +69,8 @@ ResultHeader = {'AnimalID','group','session','sessionFolder','ROI', ...
                 'ROIfit_gluc_integral_pre','ROIfit_gluc_integral_post','stamp', ...
                 'nInvalid','nResid','nPhys','nCorr','nExtraOnly','nFinalBad','nClean_final', ...
                 'ROI_mean_final','ROI_std_final', ...
-                'postMaskUsed','ROIfit_nPix_pre','ROIfit_nPix_post','ROIfit_gluc_pct_change'};
+                'postMaskUsed','ROIfit_nPix_pre','ROIfit_nPix_post','ROIfit_gluc_pct_change', ...
+                'nRescued','nSpatial','nHotKept','nClean_rescue','ROI_mean_rescue','ROI_std_rescue'};
 ResultValue = cell(numel(SubjectPath) * 2 * numel(roiFiles) + 40, numel(ResultHeader));
 counter = 0;
 stamp = datestr(now, 'yyyymmdd_HHMMSS');
@@ -101,6 +107,10 @@ for i = 1:numel(SubjectPath)
 
         if ~isfile(fullfile(path, 'LorentzianFitResult.mat'))
             fprintf('  [%s/%s] no fit results yet, skipping\n', SubjectPath(i).name, session);
+            continue;
+        end
+
+        if ~isempty(skipPattern) && contains(path, skipPattern)
             continue;
         end
 
@@ -161,18 +171,29 @@ for i = 1:numel(SubjectPath)
             end
         end
 
-        
+        % Rescue (outer-offset only problems) + neighbourhood likelihood; needs QC_extra.mat
         resc = [];
-        if ~isempty(extra)
-            try resc = computeCESTRescueQC(path, 'RoiFile', roiFiles);
-            catch ME, fprintf('  Rescue QC error %s: %s\n', path, ME.message); end
+        if runRescueQC && ~isempty(extra)
+            try
+                resc = computeCESTRescueQC(path, 'RoiFile', roiFiles);
+            catch ME
+                fprintf('  Rescue QC error %s: %s\n', path, ME.message);
+                for si = 1:numel(ME.stack)
+                    fprintf('    at %s (line %d)\n', ME.stack(si).name, ME.stack(si).line);
+                end
+                resc = [];
+            end
         end
-        
+
         % mask used for the pre-vs-post mean-ROI fit
         postMask = badPixelMask; postFlags = qcFlags; postMaskUsed = 'basic';
         if strcmp(postFitMask, 'final') && ~isempty(extra) && ~isempty(qcFlags)
             postMask = extra.finalBad; postFlags = qcFlags; postMaskUsed = 'final';
             postFlags.thresholdString = [qcFlags.thresholdString ' | + ExtraQC (Invalid/Resid/Phys/Corr)'];
+            if ~isempty(resc)
+                postMask = resc.finalBad2; postMaskUsed = 'final+rescue';
+                postFlags.thresholdString = [postFlags.thresholdString ' | + Rescue/Spatial'];
+            end
         end
 
         % Post-QC mean-ROI Z-spectrum fit (pre vs post comparison + LorentzianFitPostQC.mat).
@@ -206,6 +227,12 @@ for i = 1:numel(SubjectPath)
             end
             xInv = NaN; xRes = NaN; xPhy = NaN; xCor = NaN; xOnly = NaN; xFin = NaN; xClean = NaN;
             xMean = NaN; xSD = NaN; nPixPre = NaN; nPixPost = NaN; gPct = NaN;
+            rRes = NaN; rSpa = NaN; rHot = NaN; rClean = NaN; rMean = NaN; rSD = NaN;
+            if ~isempty(resc) && numel(resc.roi) >= r
+                e2 = resc.roi(r);
+                rRes = e2.nRescued; rSpa = e2.nSpatial; rHot = e2.nHotKept;
+                rClean = e2.nClean; rMean = e2.mean; rSD = e2.sd;
+            end
             if ~isempty(extra) && numel(extra.roi) >= r
                 e = extra.roi(r);
                 xInv = e.nInvalid; xRes = e.nResid; xPhy = e.nPhys; xCor = e.nCorr;
@@ -221,7 +248,8 @@ for i = 1:numel(SubjectPath)
                 ROI_n, ROI_nClean, ROI_mean_raw, ROI_std_raw, roi_mean_clean(r), roi_std_clean(r), ...
                 ROIfit_gluc_integral_pre, ROIfit_gluc_integral_post, stamp, ...
                 xInv, xRes, xPhy, xCor, xOnly, xFin, xClean, xMean, xSD, ...
-                postMaskUsed, nPixPre, nPixPost, gPct};
+                postMaskUsed, nPixPre, nPixPost, gPct, ...
+                rRes, rSpa, rHot, rClean, rMean, rSD};
         end
     end
 end
@@ -242,7 +270,7 @@ writetable(cell2table(ResultValue, 'VariableNames', ResultHeader), ...
 fid = fopen(fullfile(ResultDataPath, sprintf('CESTQCConfig_used_%s.txt', stamp)), 'w');
 fprintf(fid, 'CESTQCConfig used by WZ_QueueCEST_QC on %s\n', datestr(now));
 fprintf(fid, 'ConfigFile: %s\n', which('CESTQCConfig'));
-fprintf(fid, 'forceRerun: %d | makePlots: %d | fitPostQC: %d | runExtraQC: %d | makeExtraPlots: %d | postFitMask: %s\n\n', forceRerun, makePlots, fitPostQC, runExtraQC, makeExtraPlots, postFitMask);
+fprintf(fid, 'forceRerun: %d | makePlots: %d | fitPostQC: %d | runExtraQC: %d | makeExtraPlots: %d | runRescueQC: %d | skipPattern: %s | postFitMask: %s\n\n', forceRerun, makePlots, fitPostQC, runExtraQC, makeExtraPlots, runRescueQC, skipPattern, postFitMask);
 fn = fieldnames(qcConfig);
 for k = 1:numel(fn)
     v = qcConfig.(fn{k});
