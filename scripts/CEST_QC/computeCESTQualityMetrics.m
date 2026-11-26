@@ -68,6 +68,11 @@ configNames = fieldnames(def);
 overrides = setdiff(p.Parameters, p.UsingDefaults);
 overrides = intersect(overrides, configNames);
 overrides = overrides(:)';   % row cell
+keepOv = true(size(overrides));
+for q = 1:numel(overrides)
+    if isequal(opt.(overrides{q}), def.(overrides{q})), keepOv(q) = false; end
+end
+overrides = overrides(keepOv);
 
 %% -------- load fit result --------
 fitResultsPath = fullfile(dataDir, 'LorentzianFitResult.mat');

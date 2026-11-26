@@ -10,6 +10,8 @@ function extra = computeCESTExtraQC(dataDir, varargin)
 %    endBad (information only, NOT used for exclusion).
 %  - Asym (endpoint asymmetry vs ROI median) is information only.
 %  - Exclusion = Invalid  OR  (Resid + Phys + Corr >= MinFlagsSoft)
+%  - Invalid also covers ROI voxels outside the tissue mask / NaN data (never evaluated by basic QC).
+%  - extra.roi(k): per-ROI counts + mean/SD of gluc_integral_fullMap (saved fit) over the final clean ROI.
 p = inputParser;
 addParameter(p, 'RoiFile', {'ROI_ctx.mat','ROI_medulla.mat'});
 addParameter(p, 'ResidKSigma', 4);     % max|resid| / robust sigma (interior offsets)
@@ -27,7 +29,7 @@ addParameter(p, 'ROISuffix', '_QC');
 parse(p, varargin{:}); o = p.Results;
 roiFiles = cellstr(o.RoiFile);
 
-F = load(fullfile(dataDir,'LorentzianFitResult.mat'), 'popt','P','Segment','Z_corrExt');
+F = load(fullfile(dataDir,'LorentzianFitResult.mat'), 'popt','P','Segment','Z_corrExt','gluc_integral_fullMap');
 Q = load(fullfile(dataDir,'QC_result.mat'), 'badPixelMask');
 W = double(F.P.SEQ.w(:)); Z = F.Z_corrExt;
 [nx,ny,~,nW] = size(Z);
@@ -102,7 +104,7 @@ for k = 1:numel(roiFiles)
         c = corrcoef(A(j,inner), med);
         corrMap(idx(j)) = c(1,2);
     end
-    flag.Corr(idx) = flag.Corr(idx) | (corrMap(idx) < o.CorrMin);
+    flag.Corr(idx) = flag.Corr(idx) | (corrMap(idx) < o.CorrMin) | isnan(corrMap(idx));
     for w = 1:nW
         rw = resid3(:,:,w);
         offBadFrac(w,k) = mean(abs(rw(R)) > o.ResidKSigma * sigmaMap(R) & abs(rw(R)) > o.ResidAbsMin);
@@ -119,11 +121,24 @@ lines{end+1} = sprintf(['Params: ResidK=%g ResidAbsMin=%g CorrMin=%g softFlags>=
     'Resid/Phys on interior offsets | Asym and EndBad are info only'], ...
     o.ResidKSigma, o.ResidAbsMin, o.CorrMin, o.MinFlagsSoft, nt);
 newROI = cell(1,numel(roiFiles));
+roiStats = struct('label',labels,'nROI',NaN,'nInvalid',NaN,'nResid',NaN,'nPhys',NaN,'nCorr',NaN, ...
+    'nExtraOnly',NaN,'nFinalBad',NaN,'nClean',NaN,'meanFinal',NaN,'sdFinal',NaN);
 for k = 1:numel(roiFiles)
     if isempty(ROIs{k}), continue; end
     R = logical(ROIs{k});
     nROI = nnz(R);
     newROI{k} = R & ~finalBad;
+    gv = F.gluc_integral_fullMap(newROI{k});
+    roiStats(k).nROI = nROI;
+    roiStats(k).nInvalid = nnz(R&flag.Invalid);
+    roiStats(k).nResid = nnz(R&flag.Resid);
+    roiStats(k).nPhys = nnz(R&flag.Phys);
+    roiStats(k).nCorr = nnz(R&flag.Corr);
+    roiStats(k).nExtraOnly = nnz(R & extraBad & ~logical(Q.badPixelMask));
+    roiStats(k).nFinalBad = nnz(R&finalBad);
+    roiStats(k).nClean = nnz(newROI{k});
+    roiStats(k).meanFinal = mean(gv(:),'omitnan');
+    roiStats(k).sdFinal = std(gv(:),'omitnan');
     lines{end+1} = sprintf(['ROI %s: nROI %d | Invalid %d | Resid %d | Phys %d | Corr %d | ' ...
         'Asym(info) %d | EndBad(info) %d | oldBad %d | extraBad %d | finalBad %d | nClean %d (%.1f%% kept)'], ...
         labels{k}, nROI, nnz(R&flag.Invalid), nnz(R&flag.Resid), nnz(R&flag.Phys), nnz(R&flag.Corr), ...
@@ -141,6 +156,6 @@ fprintf(fid,'%s\n', lines{:}); fclose(fid);
 
 extra = struct('flag',flag,'maxResidSigma',maxResid,'maxAbsResid',maxAbs,'asymMap',asym, ...
     'corrMap',corrMap,'endBad',endBad,'offBadFrac',offBadFrac,'W',W,'extraBad',extraBad, ...
-    'finalBad',finalBad,'newROI',{newROI},'roiLabels',{labels},'opt',o);
+    'finalBad',finalBad,'newROI',{newROI},'roiLabels',{labels},'roi',roiStats,'opt',o);
 save(fullfile(dataDir,'QC_extra.mat'), 'extra', '-v7');
 end

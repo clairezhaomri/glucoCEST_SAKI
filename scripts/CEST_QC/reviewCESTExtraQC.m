@@ -20,6 +20,7 @@ fprintf('Voxels excluded ONLY by extra QC (in ROI): %d\n', numel(idx));
 if isempty(idx), return; end
 idx = idx(1:min(numel(idx), maxPanels));
 n = numel(idx); nc = 4; nr = ceil(n/nc);
+[rg,cg] = ndgrid(1:sz(1),1:sz(2)); rgR = rot90(rg,3); cgR = rot90(cg,3);
 
 figure('Position',[50 50 1200 230*nr]);
 for j = 1:n
@@ -33,7 +34,8 @@ for j = 1:n
     for q = 1:numel(names)
         if ex.flag.(names{q})(xi,yi), fl = [fl names{q} ' ']; end
     end
-    title(sprintf('(%d,%d) %s',xi,yi,fl),'FontSize',8);
+    [rr,rc] = find(rgR==xi & cgR==yi,1);
+    title(sprintf('rot(%d,%d) %s',rr,rc,fl),'FontSize',8);
     ylim([-0.5 1.3]);
 end
 set(gcf,'PaperPositionMode','auto');

@@ -24,6 +24,12 @@ function qc = CESTQCConfig()
 %     Spatial : flag if  |g - medfilt2(g)| > SpatialMADMultiplier * medfilt2(|g - medfilt2(g)|)
 %               with g = gluc_integral_fullMap and window = SpatialWindow
 %
+%   OFFSET POLICY (documented, intentional):
+%     Zmin/Zmax/RMSE/R2 use ALL offsets, including the outermost +-5 and
+%     +-4.69 ppm points. computeCESTExtraQC trims NTrim=2 outer points per side
+%     for its Resid/Phys criteria (outer points are information only).
+%     Do NOT change either until WZ_QueueCEST_ControlOuterOffsets results are reviewed.
+%
 %   MATLAB R2018a compatible.
 
 % ---------------- ROI files evaluated per session ----------------

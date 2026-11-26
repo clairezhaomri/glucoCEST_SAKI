@@ -11,7 +11,7 @@ SubjectPath = [dir(fullfile(Basepath, '*MIBIO*')); dir(fullfile(Basepath, '*KHTC
 qcConfig = CESTQCConfig();
 roiFiles = qcConfig.RoiFile;   % same ROI list as WZ_QueueCEST_QC.m
 
-ResultHeader = {'AnimalID','session','phase','diet','experimentType','ROI','ROI_mean','ROI_std'};
+ResultHeader = {'AnimalID','session','sessionFolder','phase','diet','experimentType','ROI','ROI_mean','ROI_std'};
 ResultValue = cell(numel(SubjectPath) * 2 * numel(roiFiles) + 40, numel(ResultHeader));
 counter = 0;
 
@@ -63,14 +63,14 @@ for i = 1:numel(SubjectPath)
         if ~ok
             for r = 1:numel(roiFiles)
                 counter = counter + 1;
-                ResultValue(counter,:) = {SubjectPath(i).name, session, phase, diet, experimentType, ...
+                ResultValue(counter,:) = {SubjectPath(i).name, session, S(j).name, phase, diet, experimentType, ...
                     local_roi_label(roiFiles{r}), NaN, NaN};
             end
             continue;
         end
 
         try
-            [roi_mean, roi_std, roi_labels] = plotCESTGlucoseROIResults(path, 'RoiFile', roiFiles);
+            [roi_mean, roi_std, roi_labels] = plotCESTGlucoseROIResults(path, 'RoiFile', roiFiles, 'UseSavedQC', false);
         catch ME
             fprintf('  Plot error %s: %s\n', path, ME.message);
             roi_mean = nan(1, numel(roiFiles));
@@ -82,7 +82,7 @@ for i = 1:numel(SubjectPath)
 
         for r = 1:numel(roi_labels)
             counter = counter + 1;
-            ResultValue(counter,:) = {SubjectPath(i).name, session, phase, diet, experimentType, ...
+            ResultValue(counter,:) = {SubjectPath(i).name, session, S(j).name, phase, diet, experimentType, ...
                 roi_labels{r}, roi_mean(r), roi_std(r)};
         end
     end

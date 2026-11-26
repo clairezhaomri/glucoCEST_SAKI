@@ -3,6 +3,7 @@ function plotCESTExtraQC(dataDir, varargin)
 p = inputParser;
 addParameter(p, 'MaxSpectra', 40);     % max spectra drawn per group per ROI
 addParameter(p, 'Save', true);
+addParameter(p, 'RotN', 3);
 addParameter(p, 'Visible', 'on');
 parse(p, varargin{:}); o = p.Results;
 
@@ -26,16 +27,21 @@ bg = M0; if isempty(bg) || ~isequal(size(bg),[nx ny]), bg = mean(squeeze(Z(:,:,1
 clim = [min(bg(:)) prctile(bg(:),99)]; if clim(2) <= clim(1), clim = [0 1]; end
 cols = lines(max(nR,3));
 
+% ---------- rotated copies for map display (spectra stay in raw frame) ----------
+bgR = rot90(bg,o.RotN); oldBadR = rot90(oldBad,o.RotN); newBadR = rot90(newBad,o.RotN);
+[nxr,nyr] = size(bgR);
+ROIsR = cell(1,nR);
+for k = 1:nR, if ~isempty(ROIs{k}), ROIsR{k} = rot90(ROIs{k},o.RotN); end, end
+solid = @(rgb) cat(3, rgb(1)*ones(nxr,nyr), rgb(2)*ones(nxr,nyr), rgb(3)*ones(nxr,nyr));
+
 % ---------- Fig 1: exclusion map ----------
 f1 = figure('Visible',o.Visible,'Position',[50 50 600 560]);
-imagesc(bg, clim); colormap(gca, gray); axis image off; hold on;
-ov = @(mask,rgb,a) imshow(cat(3,rgb(1)*ones(nx,ny),rgb(2)*ones(nx,ny),rgb(3)*ones(nx,ny)), ...
-    'Parent',gca); 
-h1 = ov(oldBad,[1 0 0],0.5); set(h1,'AlphaData',0.55*double(oldBad));
-h2 = ov(newBad,[1 0.6 0],0.5); set(h2,'AlphaData',0.55*double(newBad));
+imagesc(bgR, clim); colormap(gca, gray); axis image off; hold on;
+h1 = image(gca, solid([1 0 0]));   set(h1,'AlphaData',0.55*double(oldBadR));
+h2 = image(gca, solid([1 0.6 0])); set(h2,'AlphaData',0.55*double(newBadR));
 for k = 1:nR
-    if isempty(ROIs{k}), continue; end
-    B = bwboundaries(ROIs{k});
+    if isempty(ROIsR{k}), continue; end
+    B = bwboundaries(ROIsR{k});
     for b = 1:numel(B), plot(B{b}(:,2),B{b}(:,1),'-','Color',cols(k,:),'LineWidth',1.5); end
 end
 title(sprintf('%s\nred=old QC (%d) | orange=extra QC only (%d) | ROI outlines: %s', tag, ...
@@ -45,13 +51,12 @@ title(sprintf('%s\nred=old QC (%d) | orange=extra QC only (%d) | ROI outlines: %
 names = {'Invalid','Resid','Asym','Phys','Corr'};
 f2 = figure('Visible',o.Visible,'Position',[50 50 1200 420]);
 for i = 1:numel(names)
-    subplot(1,5,i); imagesc(bg, clim); colormap(gca, gray); axis image off; hold on;
+    subplot(1,5,i); imagesc(bgR, clim); colormap(gca, gray); axis image off; hold on;
     m = extra.flag.(names{i});
-    h = imshow(cat(3,ones(nx,ny),zeros(nx,ny),zeros(nx,ny)),'Parent',gca);
-    set(h,'AlphaData',0.7*double(m));
+    h = image(gca, solid([1 0 0])); set(h,'AlphaData',0.7*double(rot90(m,o.RotN)));
     for k = 1:nR
-        if isempty(ROIs{k}), continue; end
-        B = bwboundaries(ROIs{k});
+        if isempty(ROIsR{k}), continue; end
+        B = bwboundaries(ROIsR{k});
         for b = 1:numel(B), plot(B{b}(:,2),B{b}(:,1),'-','Color',cols(k,:),'LineWidth',1); end
     end
     title(sprintf('%s (%d)', names{i}, nnz(m)),'FontSize',10);
@@ -108,4 +113,5 @@ if o.Save
         print(figs{i}, fullfile(dataDir, ['QC_extra_' fn{i} '.png']), '-dpng', '-r150');
     end
 end
+if strcmpi(o.Visible,'off'), close([f1 f2 f3 f4 f5]); end
 end
